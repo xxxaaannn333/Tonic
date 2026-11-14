@@ -558,6 +558,11 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .ca-fret { width: 28px; height: 28px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--card2); font-size: 13px; flex: none; }
 .capo-all .list-item.on .ca-fret { background: var(--accent); color: #12131a; }
 @media (max-width: 380px) { .capo-best { grid-template-columns: 1fr; } }
+/* restart buttons */
+.restart-btn { display: inline-flex; align-items: center; gap: 4px; }
+.lesson-head .row.between { align-items: center; gap: 8px; }
+.lesson-head .restart-btn { flex-shrink: 0; padding: 4px 10px; font-size: 13px; }
+.hw-controls .row.gap { flex-wrap: wrap; }
 
 </style>
 </head>
@@ -2783,6 +2788,15 @@ function patternFor(pat, beats, sig, start = 0) {
   return out;
 }
 
+/** Restart button shared by the play-along and sing-along players. */
+function restartButton(fn) {
+  return h('button', { class: 'btn ghost sm restart-btn', onclick: fn, 'aria-label': 'Restart from the beginning', title: 'Restart from the beginning' }, icon('retry', 16), 'Restart');
+}
+/** Remove old result cards around a player when it restarts. */
+function clearResults(el) {
+  const host = el.closest('.step, .ov-body') || el.parentElement;
+  if (host) host.querySelectorAll('.results').forEach(r => r.remove());
+}
 class PlayAlong {
   constructor(inst, s, onFinish) {
     this.inst = inst; this.s = s; this.onFinish = onFinish;
@@ -2837,7 +2851,7 @@ class PlayAlong {
       h('button', { class: 'btn ghost sm', onclick: () => this.setBpm(this.bpm + 5), 'aria-label': 'Faster' }, '+'));
     this.readout = liveReadout(this.events.some(e => e.kind === 'chord') && this.mode !== 'rhythm' ? 'chord' : 'note', { capo: this.s.capo || 0 });
     this.el = h('div', { class: 'playalong' }, this.s.capo ? capoNote(this.s.capo, this.s.soundKey) : null, this.hud, h('div', { class: 'hw-wrap' }, this.canvas), this.lyric, this.panel,
-      h('div', { class: 'hw-controls' }, this.playBtn, h('div', { class: 'col' }, tempo, h('div', { class: 'row gap' }, this.mode === 'rhythm' ? null : this.waitBtn, this.listenBtn))), this.readout.el);
+      h('div', { class: 'hw-controls' }, this.playBtn, h('div', { class: 'col' }, tempo, h('div', { class: 'row gap' }, this.mode === 'rhythm' ? null : this.waitBtn, this.listenBtn, restartButton(() => this.restart())))), this.readout.el);
     this.updateHud();
     this.renderPanel();
     this.ro = new ResizeObserver(() => this.resize());
@@ -2878,9 +2892,15 @@ class PlayAlong {
     this._drawnPaused = false;
     clear(this.playBtn).append(icon('play', 26));
   }
+  restart() {
+    this.pause(); Synth.stopAll(); clearResults(this.el);
+    this.reset();
+    this.start();
+  }
   reset() {
     this.events.forEach(e => { if (e.state !== 'none') e.state = 'pending'; e.grade = null; });
     this.beatPos = -this.sig; this.finished = false; this.pops = []; this.onsets = []; this.usedOnset = -9; this.lastHitT = -9;
+    this.blocked = false; this.lastPitchMatch = {}; this.chordOk = 0; this._drawnPaused = false;
     this.updateHud();
   }
   listenThrough() {
@@ -3302,7 +3322,7 @@ class SingAlong {
     const tempo = h('div', { class: 'tempo' }, h('button', { class: 'btn ghost sm', onclick: () => this.setBpm(this.bpm - 5) }, '−'), this.bpmLabel, h('button', { class: 'btn ghost sm', onclick: () => this.setBpm(this.bpm + 5) }, '+'));
     const keyInfo = h('span', { class: 'muted small' }, this.s.noFit ? 'In the key you sang it' : this.shift ? `Moved ${this.shift > 0 ? 'up' : 'down'} ${Math.abs(this.shift)} semitones to fit your voice` : voiceRange() ? 'In your range' : 'Tip: do “Find your range” (Singing, chapter 1) so songs fit your voice');
     this.el = h('div', { class: 'playalong' }, this.hud, h('div', { class: 'hw-wrap' }, this.canvas), this.lyric,
-      h('div', { class: 'hw-controls' }, this.playBtn, h('div', { class: 'col' }, tempo, h('div', { class: 'row gap' }, listenButton('Hear melody', () => this.hearMelody()), listenButton('First note', () => this.firstNote())), keyInfo)));
+      h('div', { class: 'hw-controls' }, this.playBtn, h('div', { class: 'col' }, tempo, h('div', { class: 'row gap' }, listenButton('Hear melody', () => this.hearMelody()), listenButton('First note', () => this.firstNote()), restartButton(() => this.restart())), keyInfo)));
     this.colors = { accent: cssVar('--accent') || '#fb7185', text: cssVar('--text') || '#eee', muted: cssVar('--muted') || '#999', line: cssVar('--line') || '#333', ok: '#34d399', mid: '#fbbf24', bad: '#f87171' };
     this.ro = new ResizeObserver(() => this.resize()); this.ro.observe(this.canvas);
     this.off = Engine.on(f => this.onFrame(f));
@@ -3324,6 +3344,12 @@ class SingAlong {
   }
   firstNote() { Synth.preview('voice', [this.notes[0].midi], { dur: 1.2 }); }
   toggle() { if (this.running) this.pause(); else this.start(); }
+  restart() {
+    this.pause(); Synth.stopAll(); clearResults(this.el);
+    this.notes.forEach(n => { n.frames = 0; n.good = 0; }); this.trace = []; this.beatPos = -this.sig; this.finished = false;
+    this.updateHud();
+    this.start();
+  }
   async start() {
     if (Engine.state !== 'on') { const ok = await Engine.startMic(); if (!ok) { toast(Engine.errorText || 'Microphone needed'); return; } }
     Synth.stopAll();
@@ -5597,6 +5623,522 @@ TR('ukulele', 'uf', 'Fingerpicking', 'sparkle', 'Pick melodies and rolling patte
   ]);
 })();
 
+/* ---- styles_lessons.js ---- */
+/* ==========================================================================
+   STYLES paths (version 4): one path per instrument that teaches a whole
+   musical style, chapter by chapter, in very small steps.
+   Every style follows the same road map:
+     1. Hear it and understand the feel
+     2. Learn each half of the pattern on its own
+     3. Join the halves slowly, with "Wait for me"
+     4. Add chord changes
+     5. Play it in time, then perform it
+   New tracks only, so no saved lesson ids change.
+   ========================================================================== */
+
+/** A numbered "how to practise" list, shown as a lesson step. */
+const howTo = (title, list, o = {}) => info(`**${title}**\n\n` + list.map((x, i) => `${i + 1}. ${x}`).join('\n'), o);
+const PRACTISE_LOOP = ['Tap **Listen** first and hear how it should sound.', 'Play it slowly with **Wait for me** on.', 'Turn **Wait for me** off and play in time.', 'When you score 80% or more, tap **Faster** on the results card.', 'Use **Restart** any time to begin again from the count-in.'];
+
+/* ======================================================================
+   GUITAR · STYLES
+   ====================================================================== */
+(function () {
+  const SHUFFLE = 'D - U D - U D - U D - U';
+  const BOOGIE = n => { // root–fifth–sixth shuffle bass on one root (A2, D3 or E2)
+    const r = parseNote(n), f = noteName(r + 7), s = noteName(r + 9);
+    return `${n}:0.5 ${f}:0.5 ${n}:0.5 ${f}:0.5 ${n}:0.5 ${s}:0.5 ${n}:0.5 ${s}:0.5`;
+  };
+  const AP = 'A2 C3 D3 E3 G3 A3 C4 D4 E4 G4 A4 C5';
+  TR('guitar', 'gy', 'Styles', 'flame', 'Blues, rock, folk, reggae, funk, bossa nova and jazz, each taught step by step.', [
+    CH('Blues', 'Beginner', 'The 12-bar form, the shuffle feel, the boogie bass and your first blues licks.', [
+      L('What makes it the blues', [
+        info('The blues is built on a **12-bar form**: three lines of four bars.\n\n- Line 1: **A7** for four bars.\n- Line 2: **D7** for two bars, then **A7** for two.\n- Line 3: **E7**, **D7**, **A7**, **E7**.\n\nAll three chords are **seventh chords**. That slightly sour note is the blues sound.', { chordsShow: ['A7', 'D7', 'E7'] }),
+        chords('A7 D7 E7', { title: 'Learn the three chords' }),
+        quiz('How many bars are in one round of a standard blues?', ['12', '8', '16', '4'], 0, 'It is called the 12-bar blues.'),
+      ]),
+      L('Walk the 12 bars', [
+        howTo('Step by step', ['Say the bar numbers out loud as you play: “one, two, three…”', 'Watch for bar **5**: that is where D7 arrives.', 'Watch for bar **9**: the last line moves every bar.', 'Keep going even if a chord is late.']),
+        play({ chords: BLUES_A, strum: 'D - - - D - - -', bpm: 72, wait: true, title: 'Two strums per bar, waiting for you' }),
+        play({ chords: BLUES_A, strum: 'D D D D', bpm: 76, title: 'Four strums per bar, in time' }),
+      ]),
+      L('The shuffle feel', [
+        info('Blues **swings**. Each beat is split long–short: “**daa**-da, **daa**-da”. Down on the beat, the up-strum comes late, just before the next beat.', { strum: SHUFFLE, chord: 'A7', bpm: 72 }),
+        drill('D - - D - - D - - D - -', { chord: 'A7', bpm: 72, title: 'Step 1: downs only, feel the triplet' }),
+        drill(SHUFFLE, { chord: 'A7', bpm: 66, title: 'Step 2: add the late up-strum' }),
+        play({ chords: BLUES_A, strum: 'swing', bpm: 76, title: 'Step 3: shuffle the whole blues' }),
+      ]),
+      L('The boogie bass, part 1', [
+        info('The famous blues rhythm part: on the **A string**, play the open A, then rock between fret **2** and fret **4** on the D string. Two notes per beat, with a shuffle.', { tab: BOOGIE('A2'), pos: 0 }),
+        play({ melody: 'A2 E3 A2 E3 A2 E3 A2 E3', bpm: 66, wait: true, pos: 0, title: 'Step 1: just the 2nd fret' }),
+        play({ melody: 'A2 F#3 A2 F#3 A2 F#3 A2 F#3', bpm: 66, wait: true, pos: 0, title: 'Step 2: just the 4th fret' }),
+        play({ melody: BOOGIE('A2') + ' ' + BOOGIE('A2'), bpm: 66, wait: true, pos: 0, title: 'Step 3: join them' }),
+      ]),
+      L('The boogie bass, part 2', [
+        info('Move the same shape: for **D7** play it on the D and G strings, for **E7** on the low E and A strings. Your fingers make the same movement each time.', { tab: BOOGIE('D3') + ' ' + BOOGIE('E2'), pos: 0 }),
+        play({ melody: BOOGIE('D3') + ' ' + BOOGIE('D3'), bpm: 66, wait: true, pos: 0, title: 'On D' }),
+        play({ melody: BOOGIE('E2') + ' ' + BOOGIE('E2'), bpm: 66, wait: true, pos: 0, title: 'On E' }),
+        play({ melody: [BOOGIE('A2'), BOOGIE('A2'), BOOGIE('D3'), BOOGIE('A2'), BOOGIE('E2'), BOOGIE('D3'), BOOGIE('A2'), BOOGIE('E2')].join(' '), bpm: 72, pos: 0, title: 'A short blues of boogie bass' }),
+      ]),
+      L('The minor pentatonic box', [
+        info('Almost every blues solo comes from one shape: the **A minor pentatonic** scale at the **5th fret**. Two notes on every string. Use your 1st finger on fret 5 and your 3rd or 4th finger on fret 7 or 8.', { tab: run('A2', 'minor pentatonic', { oct: 2, down: false, dur: 1, last: 1 }), pos: 5 }),
+        play({ melody: run('A2', 'minor pentatonic', { oct: 1, down: true }), pos: 5, bpm: 60, wait: true, title: 'Step 1: the lower half' }),
+        play({ melody: run('A3', 'minor pentatonic', { oct: 1, down: true }), pos: 5, bpm: 60, wait: true, title: 'Step 2: the upper half' }),
+        play({ melody: run('A2', 'minor pentatonic', { oct: 2, down: true }), pos: 5, bpm: 72, title: 'Step 3: the whole box, in time' }),
+      ]),
+      L('Three blues licks', [
+        info('A **lick** is a short musical phrase. Learn these three, then use them over the 12 bars.', { tab: 'C5:0.5 A4:0.5 G4:0.5 E4:0.5 G4:2 r:2 A4:0.5 G4:0.5 E4:0.5 D4:0.5 C4:0.5 A3:1.5 r:2 E4:0.5 G4:0.5 A4:1 G4:0.5 E4:0.5 A3:2', pos: 5 }),
+        play({ melody: 'C5:0.5 A4:0.5 G4:0.5 E4:0.5 G4:2 r:4', pos: 5, bpm: 66, wait: true, title: 'Lick 1: falling' }),
+        play({ melody: 'A4:0.5 G4:0.5 E4:0.5 D4:0.5 C4:0.5 A3:1.5 r:4', pos: 5, bpm: 66, wait: true, title: 'Lick 2: down to the root' }),
+        play({ melody: 'E4:0.5 G4:0.5 A4:1 G4:0.5 E4:0.5 A3:2 r:4', pos: 5, bpm: 66, wait: true, title: 'Lick 3: up and home' }),
+      ]),
+      L('Song: Rainy Day Blues', [
+        howTo('Step by step', ['First time: plain down-strums.', 'Second time: the shuffle strum.', 'Third time: sing the words over the shuffle.']),
+        song('rainyblues', { strum: 'D D D D', bpm: 72, text: 'Plain down-strums first.' }),
+        song('rainyblues', { strum: 'swing', text: 'Now with the shuffle.' }),
+      ]),
+    ]),
+    CH('Rock', 'Beginner', 'Power chords, palm muting, driving eighths and your first riff.', [
+      L('The power chord', [
+        info('A **power chord** uses only two notes: the root and the fifth. Put your **1st finger** on the root and your **3rd finger** two frets higher on the next string. Mute every other string by letting the fingers touch them lightly.\n\nPower chords are written with a **5**: E5, A5, G5.', { chordsShow: ['E5', 'A5', 'D5'] }),
+        chords('E5 A5 D5', { title: 'Open power chords' }),
+      ]),
+      L('Moving power chords', [
+        info('Because a power chord has no open strings, you can **slide the same shape** anywhere. Root on the **6th string** → G5 at fret 3. Root on the **5th string** → C5 at fret 3.', { chordsShow: ['G5', 'C5', 'B5', 'F5'] }),
+        howTo('Step by step', ['Make the shape on G5 and check every note rings.', 'Lift the pressure slightly but keep the fingers on the strings.', 'Slide to the new fret without letting go.', 'Press again and strum.']),
+        chords('G5 C5 A5 F5', { title: 'Find them all' }),
+        play({ chords: 'G5:4 C5:4 A5:4 F5:4', strum: 'D - D - D - D -', bpm: 72, wait: true, title: 'Slide between them' }),
+      ]),
+      L('Palm-muted eighths', [
+        info('Rock rhythm is **eight down-strums per bar** with the edge of your picking hand resting on the strings at the bridge. It sounds tight and chunky.\n\n' + TIMING_NOTE, { strum: 'D D D D D D D D', chord: 'E5' }),
+        drill('D - D - D - D -', { chord: 'E5', bpm: 80, title: 'Step 1: muted quarter notes' }),
+        drill('D D D D D D D D', { chord: 'E5', bpm: 80, title: 'Step 2: muted eighths' }),
+        drill('D D D D D D D D', { chord: 'A5', bpm: 96, title: 'Step 3: faster' }),
+      ]),
+      L('Accents: open up on 2 and 4', [
+        info('Lift the palm mute on **beats 2 and 4** and let those chords ring out. Muted–open–muted–open: this is the heartbeat of rock.', { strum: 'D D D D D D D D', chord: 'A5' }),
+        drill('D D D D D D D D', { chord: 'A5', bpm: 88, title: 'Muted on 1 and 3, open on 2 and 4' }),
+        play({ chords: 'E5:4 G5:4 A5:4 E5:4', strum: 'D D D D D D D D', bpm: 92, title: 'With chord changes' }),
+      ]),
+      L('Your first riff', [
+        info('A **riff** is a short, catchy chord or note pattern that repeats. This one uses three power chords and a quick push.', { chordsShow: ['E5', 'G5', 'A5'] }),
+        play({ chords: 'E5:2 G5:2 A5:4', strum: 'D - D - D D D D', bpm: 72, wait: true, title: 'Step 1: first half' }),
+        play({ chords: 'E5:2 G5:2 B5:2 A5:2', strum: 'D - D - D - D -', bpm: 72, wait: true, title: 'Step 2: second half' }),
+        play({ chords: 'E5:2 G5:2 A5:4 E5:2 G5:2 B5:2 A5:2', strum: 'D D D D D D D D', bpm: 84, loops: 2, title: 'Step 3: the whole riff' }),
+      ]),
+      L('Rock ballad picking', [
+        info('Rock ballads often start soft: pick each chord one string at a time, then hit hard in the chorus.', { pick: 'T 3 2 1 2 3 2 3', chord: 'Am' }),
+        play({ chords: 'Am:4 G:4 F:4 E:4', pick: 'T 3 2 1 2 3 2 3', bpm: 66, wait: true, title: 'Verse: picked' }),
+        play({ chords: 'Am:4 G:4 F:4 E:4', strum: 'D - D U - U D U', bpm: 72, title: 'Chorus: full strums' }),
+      ]),
+    ]),
+    CH('Folk & country', 'Intermediate', 'Boom-chick, alternating bass and bass runs that join the chords.', [
+      L('Boom-chick review', [
+        info('Bass note (**B**) on beats 1 and 3, strum on beats 2 and 4. Keep the bass notes clear and the strums light.', { strum: 'B - D - B - D -', chord: 'G' }),
+        drill('B - D - B - D -', { chord: 'G', bpm: 76, title: 'On G' }),
+        drill('B - D - B - D -', { chord: 'C', bpm: 76, title: 'On C' }),
+      ]),
+      L('Alternating bass', [
+        info('Country players swap between **two bass notes**: the root on beat 1, then another chord note on beat 3. On **G**: 6th string, then 4th string. On **C**: 5th string, then 4th string.', { pick: 'T - D - B - D -', chord: 'G' }),
+        play({ chords: 'G:4 G:4 C:4 C:4', pick: 'T - B -', pickGrid: 1, bpm: 72, wait: true, title: 'Step 1: just the two bass notes' }),
+        play({ chords: 'G:4 C:4 G:4 D:4', pick: 'T 1+2+3 B 1+2+3', pickGrid: 1, bpm: 76, title: 'Step 2: bass – strum – bass – strum' }),
+      ]),
+      L('Bass run: G to C', [
+        info('Walk up from G to C on the bass strings: **G – A – B – C**. The last note lands on beat 1 of the new chord.', { tab: 'G2 A2 B2 C3:4', pos: 0 }),
+        play({ melody: 'G2 A2 B2 C3:4', bpm: 60, wait: true, pos: 0, title: 'Step 1: the run alone' }),
+        play({ chords: 'G:4 G:4 C:4 C:4', pick: 'T 1+2+3 B 1+2+3', pickGrid: 1, bpm: 66, wait: true, title: 'Step 2: the two chords' }),
+        play({ melody: 'G2:2 D3:2 G2:2 D3:2 G2 A2 B2 C3:2 G2:1 C3:4', bpm: 66, wait: true, pos: 0, title: 'Step 3: bass line with the run' }),
+      ]),
+      L('Bass run: C back to G', [
+        info('Walk down: **C – B – A – G**.', { tab: 'C3 B2 A2 G2:4', pos: 0 }),
+        play({ melody: 'C3 B2 A2 G2:4', bpm: 60, wait: true, pos: 0, title: 'The run alone' }),
+        play({ melody: 'G2 A2 B2 C3:4 C3 B2 A2 G2:4', bpm: 66, pos: 0, title: 'Up, then down' }),
+      ]),
+      L('Country progression', [
+        howTo('Step by step', PRACTISE_LOOP),
+        play({ chords: 'G:4 C:4 G:4 D:4 G:4 C:4 D:4 G:4', strum: 'B - D U B - D U', bpm: 76, wait: true, title: 'Boom-chick-a, waiting' }),
+        play({ chords: 'G:4 C:4 G:4 D:4 G:4 C:4 D:4 G:4', strum: 'B - D U B - D U', bpm: 90, title: 'In time' }),
+      ]),
+      L('Song: Campfire Song, country style', [song('campfire', { strum: 'B - D U B - D U', text: 'Boom-chick-a all the way through.' })]),
+    ]),
+    CH('Reggae & ska', 'Intermediate', 'The offbeat skank, the ska upstroke and the one-drop groove.', [
+      L('The skank', [
+        info('In reggae the guitar plays **only on beats 2 and 4**, short and sharp. That chop is called the **skank**.\n\nHow to make it short: strum, then straight away **relax your fretting fingers** so the strings stop ringing. Don’t lift them off.', { strum: '- - D - - - D -', chord: 'Am' }),
+        drill('- - D - - - D -', { chord: 'Am', bpm: 66, title: 'Step 1: chop on 2 and 4' }),
+        drill('- - D - - - D -', { chord: 'Dm', bpm: 72, title: 'Step 2: on Dm' }),
+      ]),
+      L('Count the gaps', [
+        info('The hard part of reggae is the **silence on 1 and 3**. Keep counting through it. Tap your foot on 1 and 3 while the guitar plays on 2 and 4.'),
+        rhythm({ chords: 'Am:4 Dm:4 Am:4 Dm:4', pattern: '- - D - - - D -', bpm: 70, title: 'Two chords' }),
+        play({ chords: 'Am:4 Dm:4 Em:4 Am:4', strum: '- - D - - - D -', bpm: 76, title: 'Three chords, checked' }),
+      ]),
+      L('Ska upstrokes', [
+        info('**Ska** is reggae’s faster older brother: short **up-strums on every “and”**.', { strum: '- U - U - U - U', chord: 'C' }),
+        drill('- U - U - U - U', { chord: 'C', bpm: 92, title: 'Upstrokes only' }),
+        play({ chords: 'C:4 Am:4 F:4 G:4', strum: '- U - U - U - U', bpm: 112, title: 'Ska tempo' }),
+      ]),
+      L('The double chop', [
+        info('Modern reggae often adds a quick up-strum straight after the skank: “chop-**a**”.', { strum: '- - D U - - D U', chord: 'Am' }),
+        drill('- - D U - - D U', { chord: 'Am', bpm: 70 }),
+        play({ chords: 'Am:4 G:4 F:4 G:4', strum: '- - D U - - D U', bpm: 74, loops: 2, title: 'Reggae progression' }),
+      ]),
+    ]),
+    CH('Funk', 'Intermediate', 'Ninth chords, sixteenth mutes and the one-chord groove.', [
+      L('The ninth chord', [
+        info('Funk guitar loves the **ninth chord**: E9 and D9 are the classic shapes. Play only the top four or five strings and keep it short.', { chordsShow: ['E9', 'D9'] }),
+        chords('E9 D9', { title: 'Two funky shapes' }),
+      ]),
+      L('The constant sixteenth hand', [
+        info('Your strumming hand swings **sixteen times per bar**: down, up, down, up, without stopping. You decide which swings touch the strings.', { strum: 'D U D U D U D U D U D U D U D U', chord: 'E9', bpm: 56 }),
+        drill('D U D U D U D U D U D U D U D U', { chord: 'E9', bpm: 52, bars: 2, title: 'Step 1: all sixteen, softly' }),
+        drill('x U x U x U x U x U x U x U x U', { chord: 'E9', bpm: 56, bars: 2, title: 'Step 2: all muted (chicken scratch)' }),
+      ]),
+      L('Hits inside the scratch', [
+        info('Now let a few strums **ring** and mute the rest. Press the chord for the hit, relax for the scratches.', { strum: 'D - x U - U x - D - x U - U x U', chord: 'E9', bpm: 60 }),
+        drill('D - x - D - x - D - x - D - x -', { chord: 'E9', bpm: 60, bars: 2, title: 'Step 1: hit, scratch' }),
+        drill('D - x U - U x - D - x U - U x U', { chord: 'E9', bpm: 60, bars: 2, title: 'Step 2: the full groove' }),
+      ]),
+      L('The one-chord jam', [
+        info('Many funk songs sit on **one chord** for minutes. The groove is the song. Then a second chord arrives for contrast.'),
+        play({ chords: 'E9:4 E9:4 E9:4 E9:4', strum: 'D - x U - U x - D - x U - U x U', bpm: 64, title: 'Stay on E9' }),
+        play({ chords: 'E9:4 E9:4 D9:4 E9:4', strum: 'D - x U - U x - D - x U - U x U', bpm: 68, loops: 2, title: 'Add D9' }),
+      ]),
+    ]),
+    CH('Bossa nova', 'Pro', 'Seventh-chord shapes and the Brazilian thumb-and-finger pattern.', [
+      L('The bossa chords', [
+        info('Bossa nova uses soft **seventh chords**. Learn these five shapes first.', { chordsShow: ['Am7', 'Dm7', 'Cmaj7', 'Fmaj7', 'E7'] }),
+        chords('Am7 Dm7 Cmaj7 Fmaj7 E7', { title: 'Find each shape' }),
+      ]),
+      L('The thumb', [
+        info('Your **thumb** plays the bass on beats **1 and 3** without stopping, like a soft heartbeat. Learn it alone first.', { pick: 'T - - - B - - -', chord: 'Am7' }),
+        play({ chords: 'Am7:4 Am7:4 Dm7:4 Dm7:4', pick: 'T - - - B - - -', bpm: 72, wait: true, title: 'Bass only' }),
+      ]),
+      L('The fingers', [
+        info('Fingers **i, m, a** pluck the top three strings together, **off the beat**. Here is the most common rhythm: “**1** (&) **2 &** (3) **&** (4) &”.', { pick: 'T - 1+2+3 1+2+3 B 1+2+3 - 1+2+3', chord: 'Am7' }),
+        play({ chords: 'Am7:4 Am7:4', pick: '- - 1+2+3 1+2+3 - 1+2+3 - 1+2+3', bpm: 60, wait: true, title: 'Step 1: fingers alone' }),
+        play({ chords: 'Am7:4 Am7:4', pick: 'T - 1+2+3 1+2+3 B 1+2+3 - 1+2+3', bpm: 56, wait: true, title: 'Step 2: thumb and fingers together' }),
+      ]),
+      L('Bossa progression', [
+        howTo('Step by step', PRACTISE_LOOP),
+        play({ chords: 'Am7:4 Dm7:4 E7:4 Am7:4', pick: 'T - 1+2+3 1+2+3 B 1+2+3 - 1+2+3', bpm: 64, wait: true, title: 'Minor bossa' }),
+        play({ chords: 'Cmaj7:4 Am7:4 Dm7:4 G7:4', pick: 'T - 1+2+3 1+2+3 B 1+2+3 - 1+2+3', bpm: 72, loops: 2, title: 'Major bossa, in time' }),
+      ]),
+    ]),
+    CH('Jazz', 'Pro', 'Seventh chords, the ii–V–I and swing comping.', [
+      L('The ii–V–I', [
+        info('Jazz is built on one progression: **ii – V – I**. In C it is **Dm7 – G7 – Cmaj7**. Each chord leans into the next.', { chordsShow: ['Dm7', 'G7', 'Cmaj7'] }),
+        chords('Dm7 G7 Cmaj7', { title: 'The three chords' }),
+        play({ chords: 'Dm7:4 G7:4 Cmaj7:8', strum: 'D - - - D - - -', bpm: 72, wait: true, title: 'Slowly' }),
+      ]),
+      L('Four to the bar', [
+        info('Old big-band guitarists strummed **four short down-strums per bar**, all the same volume, like a ticking clock. Let each strum stop just before the next.', { strum: 'D D D D', chord: 'G7' }),
+        drill('D D D D', { chord: 'Dm7', bpm: 100, title: 'Even quarters' }),
+        play({ chords: 'Dm7:4 G7:4 Cmaj7:4 Am7:4', strum: 'D D D D', bpm: 110, loops: 2, title: 'Rhythm changes, four to the bar' }),
+      ]),
+      L('Comping on 2 and 4', [
+        info('**Comping** means accompanying. A modern jazz guitarist plays short chords on **2 and 4**, like a drummer’s hi-hat, and leaves space for the soloist.', { strum: '- - D - - - D -', chord: 'Dm7' }),
+        drill('- - D - - - D -', { chord: 'Dm7', bpm: 96, title: 'Short chords on 2 and 4' }),
+        play({ chords: 'Dm7:4 G7:4 Cmaj7:8', strum: '- - D - - - D -', bpm: 104, loops: 2, title: 'ii–V–I comping' }),
+      ]),
+      L('ii–V–I in G', [
+        info('The same progression in G: **Am7 – D7 – Gmaj7**.', { chordsShow: ['Am7', 'D7', 'Gmaj7'] }),
+        play({ chords: 'Am7:4 D7:4 Gmaj7:8', strum: 'D D D D', bpm: 96, wait: true, title: 'Slowly' }),
+        play({ chords: 'Am7:4 D7:4 Gmaj7:4 Em7:4', strum: 'swing', bpm: 110, loops: 2, title: 'With swing' }),
+      ]),
+      L('Jazz blues', [
+        info('Jazz players take the 12-bar blues and add colour: ninths and a ii–V at the end. Use everything from this chapter.'),
+        play({ chords: 'A7:4 D9:4 A7:4 A7:4 D9:4 D9:4 A7:4 A7:4 Bm7:4 E7:4 A7:4 E7:4', strum: 'D D D D', bpm: 104, title: 'Jazz blues in A' }),
+      ]),
+    ]),
+  ]);
+})();
+
+/* ======================================================================
+   UKULELE · STYLES
+   ====================================================================== */
+TR('ukulele', 'uy', 'Styles', 'flame', 'Hawaiian, reggae, swing, blues, calypso and pop ballad, each taught step by step.', [
+  CH('Hawaiian', 'Beginner', 'The island strum, the Hawaiian vamp and a gentle swing feel.', [
+    L('The island strum', [
+      info('The best-known ukulele pattern: “**down, down-up, up-down-up**”. It is the folk strum played with a relaxed, bouncy feel.', { strum: 'D - D U - U D U', chord: 'C' }),
+      drill('D - D U - - - -', { chord: 'C', bpm: 66, title: 'Step 1: first half' }),
+      drill('- - - - - U D U', { chord: 'C', bpm: 66, title: 'Step 2: second half' }),
+      drill('D - D U - U D U', { chord: 'C', bpm: 72, title: 'Step 3: join them' }),
+    ]),
+    L('The Hawaiian vamp', [
+      info('Hawaiian songs end every verse with a **vamp**: **D7 – G7 – C**, played twice. It sounds like a door closing gently.', { chordsShow: ['D7', 'G7', 'C'] }),
+      chords('D7 G7 C', { title: 'The three chords' }),
+      play({ chords: 'D7:4 G7:4 C:8', strum: 'D - D U - U D U', bpm: 72, wait: true, title: 'Vamp, waiting' }),
+      play({ chords: 'D7:4 G7:4 C:4 C:4 D7:4 G7:4 C:8', strum: 'D - D U - U D U', bpm: 84, title: 'Vamp twice, in time' }),
+    ]),
+    L('Island swing', [
+      info('Play the island strum with a **swing**: the up-strums arrive late. It makes the song float.', { strum: 'swing', chord: 'F' }),
+      play({ chords: 'C:4 A7:4 D7:4 G7:4', strum: 'swing', bpm: 80, wait: true, title: 'Swing progression' }),
+      song('islandbreeze', { strum: 'D - D U - U D U', text: 'The whole song with the island strum.' }),
+    ]),
+  ]),
+  CH('Reggae', 'Beginner', 'The chop on 2 and 4 and the double chop.', [
+    L('The chop', [
+      info('Strum only on **beats 2 and 4**, short and dry. Straight after each strum, relax your fretting fingers to stop the sound. Tap your foot on 1 and 3.', { strum: '- - D - - - D -', chord: 'Am' }),
+      drill('- - D - - - D -', { chord: 'Am', bpm: 66, title: 'Step 1: on Am' }),
+      rhythm({ chords: 'Am:4 Dm:4 Am:4 Dm:4', pattern: '- - D - - - D -', bpm: 70, title: 'Step 2: two chords' }),
+    ]),
+    L('The double chop', [
+      info('Add a quick up-strum after each chop: “chop-**a**”.', { strum: '- - D U - - D U', chord: 'C' }),
+      drill('- - D U - - D U', { chord: 'C', bpm: 70 }),
+      play({ chords: 'C:4 Am:4 F:4 G:4', strum: '- - D U - - D U', bpm: 76, loops: 2, title: 'Reggae progression' }),
+    ]),
+  ]),
+  CH('Swing & ragtime', 'Intermediate', 'Sixth chords, the ragtime progression and chunky swing strums.', [
+    L('Sixth chords', [
+      info('Swing-era ukulele loves the **sixth chord**. **C6** is the easiest chord there is: all four strings open!', { chordsShow: ['C6', 'A7', 'D7', 'G7'] }),
+      chords('C6 A7 D7 G7', { title: 'The swing chords' }),
+    ]),
+    L('The ragtime progression', [
+      info('Ragtime songs move around a circle of seventh chords: **C – E7 – A7 – D7 – G7 – C**. Each chord pulls to the next.', { chordsShow: ['C', 'E7', 'A7', 'D7', 'G7'] }),
+      play({ chords: 'C:4 E7:4 A7:4 A7:4 D7:4 G7:4 C:4 G7:4', strum: 'D - D - D - D -', bpm: 72, wait: true, title: 'Step 1: slowly' }),
+      play({ chords: 'C:4 E7:4 A7:4 A7:4 D7:4 G7:4 C:4 G7:4', strum: 'swing', bpm: 96, title: 'Step 2: with swing' }),
+    ]),
+    L('Chunky swing', [
+      info('Add a **chuck** on beats 2 and 4. It sounds like a brush on a snare drum.', { strum: 'D - x - D - x -', chord: 'C6' }),
+      drill('D - x - D - x -', { chord: 'C6', bpm: 92 }),
+      play({ chords: 'C6:4 A7:4 D7:4 G7:4', strum: 'D - x U D - x U', bpm: 100, loops: 2, title: 'Swing groove' }),
+    ]),
+  ]),
+  CH('Blues', 'Intermediate', 'The 12-bar blues in C and a shuffle strum.', [
+    L('The 12 bars in C', [
+      info('On ukulele the blues lives in **C**: **C7, F7, G7**.', { chordsShow: ['C7', 'F7', 'G7'] }),
+      chords('C7 F7 G7', { title: 'The three chords' }),
+      play({ chords: BLUES_C, strum: 'D - D - D - D -', bpm: 76, wait: true, title: 'Walk the 12 bars' }),
+    ]),
+    L('Shuffle', [
+      info('Swing every strum: long–short, long–short.', { strum: 'D - U D - U D - U D - U', chord: 'C7' }),
+      drill('D - U D - U D - U D - U', { chord: 'C7', bpm: 72 }),
+      play({ chords: BLUES_C, strum: 'swing', bpm: 84, title: 'Shuffle blues' }),
+    ]),
+  ]),
+  CH('Calypso & pop', 'Intermediate', 'The calypso strum and the four-chord pop song.', [
+    L('Calypso', [
+      info('Sunny and bouncy: “**down, down-up, up-down**”, leaving the last “and” empty.', { strum: 'D - D U - U D -', chord: 'C' }),
+      drill('D - D U - U D -', { chord: 'C', bpm: 84 }),
+      play({ chords: 'C:4 F:4 G7:4 C:4', strum: 'D - D U - U D -', bpm: 92, loops: 2, title: 'Calypso progression' }),
+    ]),
+    L('Four-chord pop', [
+      info('**C – G – Am – F** is the most-used progression in pop music. Try it with the pop strum: a gap after beat 1.', { strum: 'D - - U - U D U', chord: 'C' }),
+      drill('D - - U - U D U', { chord: 'C', bpm: 76 }),
+      play({ chords: 'C:4 G:4 Am:4 F:4', strum: 'D - - U - U D U', bpm: 84, loops: 2, title: 'Pop song' }),
+    ]),
+  ]),
+  CH('Pop ballad', 'Pro', 'Picked verse, strummed chorus and building a song.', [
+    L('Picked verse', [
+      info('Start the verse softly with a picked roll.', { pick: '4 3 2 1 2 3 2 3', chord: 'Am' }),
+      play({ chords: 'Am:4 F:4 C:4 G:4', pick: '4 3 2 1 2 3 2 3', bpm: 62, wait: true, title: 'Slowly' }),
+      play({ chords: 'Am:4 F:4 C:4 G:4', pick: '4 3 2 1 2 3 2 3', bpm: 70, loops: 2, title: 'In time' }),
+    ]),
+    L('Strummed chorus', [
+      play({ chords: 'F:4 G:4 C:4 Am:4', strum: 'D - D U - U D U', bpm: 76, loops: 2, title: 'Chorus' }),
+    ]),
+    L('Verse into chorus', [
+      howTo('Step by step', ['Play the verse picked and quiet.', 'On the last bar of the verse, get a little louder.', 'Hit the first chorus chord with a big strum.', 'Use **Restart** and try the whole thing again until the change feels smooth.']),
+      play({ chords: 'Am:4 F:4 C:4 G:4', pick: '4 3 2 1 2 3 2 3', bpm: 70, title: 'Verse' }),
+      play({ chords: 'F:4 G:4 C:4 Am:4 F:4 G:4 C:8', strum: 'D - D U - U D U', bpm: 70, title: 'Chorus' }),
+    ]),
+  ]),
+]);
+
+/* ======================================================================
+   PIANO · STYLES
+   ====================================================================== */
+(function () {
+  const POP4 = 'C:4 G:4 Am:4 F:4';
+  const BOOG = r => { const m = parseNote(r); return [0, 4, 7, 9, 10, 9, 7, 4].map(i => noteName(m + i) + ':0.5').join(' '); };
+  TR('piano', 'py', 'Styles', 'flame', 'Pop, blues, boogie-woogie, gospel, jazz, Latin and classical, each taught step by step.', [
+    CH('Pop', 'Beginner', 'Four-chord pop, pumping eighths and the piano ballad.', [
+      L('The four-chord song', [
+        info('**C – G – Am – F**: the chords behind hundreds of pop hits. Left hand plays the **root**, right hand plays the chord.', { chordsShow: ['C', 'G', 'Am', 'F'] }),
+        chords('C G Am F', { title: 'Find each chord' }),
+        play({ chords: POP4, pick: 'T 1+2+3 - 1+2+3', pickGrid: 1, bpm: 66, wait: true, title: 'Bass, then chord' }),
+      ]),
+      L('Smooth voicings', [
+        info('Pros move the right hand **as little as possible**. Play G as **B–D–G** and F as **A–C–F** so your hand barely moves from C.', { chordsShow: ['C', 'G/B', 'Am', 'F/A'] }),
+        play({ chords: 'C:4 G/B:4 Am:4 F/A:4', bpm: 70, wait: true, title: 'Minimal movement' }),
+      ]),
+      L('Pumping eighths', [
+        info('Upbeat pop piano: the right hand plays the chord **eight times per bar**, evenly. Accent beats 2 and 4.', { strum: 'D D D D D D D D', chord: 'C', on: 'guitar' }),
+        rhythm({ chords: POP4, pattern: 'D D D D D D D D', bpm: 84, title: 'Timing first' }),
+        play({ chords: POP4, pick: '1+2+3 1+2+3 1+2+3 1+2+3 1+2+3 1+2+3 1+2+3 1+2+3', bpm: 88, loops: 2, title: 'Chords checked' }),
+      ]),
+      L('Piano ballad', [
+        howTo('Step by step', PRACTISE_LOOP),
+        play({ chords: 'Am:4 F:4 C:4 G:4', pick: 'T B 1 2 3 2 1 B', bpm: 60, wait: true, title: 'Flowing arpeggios, slowly' }),
+        play({ chords: 'Am:4 F:4 C:4 G:4 F:4 G:4 C:8', pick: 'T B 1 2 3 2 1 B', bpm: 68, title: 'A ballad section' }),
+      ]),
+    ]),
+    CH('Blues', 'Beginner', 'The 12-bar blues, left-hand shuffle and the blues scale.', [
+      L('The 12 bars in C', [
+        info('The blues in C uses **C7, F7, G7**. Learn the form with simple block chords.', { chordsShow: ['C7', 'F7', 'G7'] }),
+        play({ chords: BLUES_C, pick: '1+2+3+4 - - - 1+2+3+4 - - -', bpm: 72, wait: true, title: 'Two chords per bar' }),
+      ]),
+      L('Left-hand shuffle', [
+        info('The left hand rocks between **root–fifth** and **root–sixth** with a swing. Start on C in the octave below middle C.', { keys: { lo: 36, hi: 60, notes: [48, 55, 57] } }),
+        play({ melody: 'C3:0.5 G3:0.5 C3:0.5 G3:0.5 C3:0.5 A3:0.5 C3:0.5 A3:0.5', bpm: 66, wait: true, title: 'Step 1: one bar on C' }),
+        play({ melody: 'F3:0.5 C4:0.5 F3:0.5 C4:0.5 F3:0.5 D4:0.5 F3:0.5 D4:0.5', bpm: 66, wait: true, title: 'Step 2: one bar on F' }),
+        play({ melody: 'G3:0.5 D4:0.5 G3:0.5 D4:0.5 G3:0.5 E4:0.5 G3:0.5 E4:0.5', bpm: 66, wait: true, title: 'Step 3: one bar on G' }),
+      ]),
+      L('The blues scale', [
+        info('The **C blues scale**: C – E♭ – F – F♯ – G – B♭ – C. The F♯ is the “blue note”.', { keys: { lo: 60, hi: 72, notes: [60, 63, 65, 66, 67, 70, 72] } }),
+        play({ melody: run('C4', 'blues'), bpm: 66, wait: true, title: 'Up and down' }),
+        play({ melody: 'G4:0.5 Bb4:0.5 C5:1 Bb4:0.5 G4:0.5 F#4:0.5 F4:0.5 Eb4:0.5 C4:1.5 r:2', bpm: 72, title: 'A blues lick' }),
+      ]),
+      L('Song: Rainy Day Blues', [song('rainyblues', { text: 'Block chords in your right hand. Swing it.' })]),
+    ]),
+    CH('Boogie-woogie', 'Intermediate', 'The rolling left hand of boogie-woogie, step by step.', [
+      L('The boogie bass on C', [
+        info('The boogie-woogie left hand walks **up and down the chord**: 1 – 3 – 5 – 6 – ♭7 – 6 – 5 – 3. Eight notes per bar, swung.', { keys: { lo: 36, hi: 60, notes: [48, 52, 55, 57, 58] } }),
+        play({ melody: BOOG('C3'), bpm: 60, wait: true, title: 'Step 1: one bar' }),
+        play({ melody: BOOG('C3') + ' ' + BOOG('C3'), bpm: 72, title: 'Step 2: in time' }),
+      ]),
+      L('Move it to F and G', [
+        play({ melody: BOOG('F2'), bpm: 60, wait: true, title: 'On F' }),
+        play({ melody: BOOG('G2'), bpm: 60, wait: true, title: 'On G' }),
+      ]),
+      L('The whole boogie', [
+        howTo('Step by step', ['Play the boogie bass through all 12 bars slowly.', 'Speed up with the **Faster** button.', 'When the left hand runs by itself, add right-hand chords on beats 2 and 4.']),
+        play({ melody: [BOOG('C3'), BOOG('C3'), BOOG('C3'), BOOG('C3'), BOOG('F2'), BOOG('F2'), BOOG('C3'), BOOG('C3'), BOOG('G2'), BOOG('F2'), BOOG('C3'), BOOG('G2')].join(' '), bpm: 80, title: '12-bar boogie' }),
+      ]),
+    ]),
+    CH('Gospel', 'Intermediate', 'Big two-hand chords, passing chords and the gospel walk-up.', [
+      L('Octave bass, full chords', [
+        info('Gospel piano is big and warm. Left hand plays the root in **octaves**, right hand plays full chords high in the keyboard.', { chordsShow: ['C', 'F', 'G'] }),
+        play({ chords: 'C:4 F:4 C:4 G:4', pick: 'T+B 1+2+3 - 1+2+3', pickGrid: 1, bpm: 66, wait: true, title: 'Octave bass' }),
+      ]),
+      L('The IV–I move', [
+        info('Gospel songs keep coming home through **F to C** (IV to I): the “Amen” sound.', { chordsShow: ['F', 'C'] }),
+        play({ chords: 'F:4 C:4 F:4 C:4', bpm: 66, wait: true, title: 'Amen' }),
+        play({ chords: 'C:2 C7:2 F:2 Fm:2 C:4 G:4', bpm: 66, title: 'With colour chords' }),
+      ]),
+      L('The walk-up', [
+        info('Walk the bass up from C to F with chords on top: **C – C/E – F**. Then from F to G: **F – F#dim7 – G**.', { chordsShow: ['C', 'C/E', 'F', 'F#dim7', 'G'] }),
+        play({ chords: 'C:2 C/E:2 F:4 F:2 F#dim7:2 G:4', bpm: 60, wait: true, title: 'Step by step' }),
+        play({ chords: 'C:2 C/E:2 F:2 F#dim7:2 C/G:2 G:2 C:4', bpm: 72, loops: 2, title: 'Gospel turnaround' }),
+      ]),
+      L('Song: Amazing Grace, gospel style', [song('amazing', { text: 'Octave bass and full chords. Let it ring.' })]),
+    ]),
+    CH('Jazz', 'Pro', 'Shell voicings, the ii–V–I and swing comping.', [
+      L('Shell voicings', [
+        info('Jazz pianists often play just **three notes**: the root in the left hand, and the **3rd and 7th** in the right. These are **shell voicings**.', { chordsShow: ['Dm7', 'G7', 'Cmaj7'] }),
+        play({ chords: 'Dm7:4 G7:4 Cmaj7:8', pick: 'T 2+4 - -', pickGrid: 1, bpm: 66, wait: true, title: 'Root + 3rd + 7th' }),
+      ]),
+      L('Full ii–V–I', [
+        play({ chords: 'Dm7:4 G7:4 Cmaj7:8', pick: 'T 1+2+3+4 - -', pickGrid: 1, bpm: 72, wait: true, title: 'All four notes' }),
+        play({ chords: 'Am7:4 D7:4 Gmaj7:8', pick: 'T 1+2+3+4 - -', pickGrid: 1, bpm: 72, title: 'In G' }),
+      ]),
+      L('Swing comping', [
+        info('Play short chords on the “**and**” of 2 and on 4. Leave lots of space.', { strum: '- - - D D - - -', chord: 'Dm7', on: 'guitar' }),
+        rhythm({ chords: 'Dm7:4 G7:4 Cmaj7:8', pattern: '- - - D D - - -', bpm: 96, title: 'Timing' }),
+        play({ chords: 'Dm7:4 G7:4 Cmaj7:4 A7:4', pick: 'T - - 1+2+3+4 1+2+3+4 - - -', bpm: 100, loops: 2, title: 'Comp it' }),
+      ]),
+    ]),
+    CH('Latin', 'Pro', 'The salsa montuno and the bossa nova feel.', [
+      L('The montuno', [
+        info('A **montuno** is a repeating, off-beat right-hand pattern in salsa. Play broken chords that **anticipate** the beat.', { pick: '1 - 3 2 - 3 - 2', chord: 'C' }),
+        play({ chords: 'C:4 F:4 G:4 F:4', pick: '1 - 3 2 - 3 - 2', bpm: 66, wait: true, title: 'Step 1: slowly' }),
+        play({ chords: 'C:4 F:4 G:4 F:4', pick: '1 - 3 2 - 3 - 2', bpm: 88, loops: 2, title: 'Step 2: salsa tempo' }),
+      ]),
+      L('Bossa nova', [
+        info('Left hand: root on 1 and fifth on 3. Right hand: soft seventh chords, off the beat.'),
+        play({ chords: 'Cmaj7:4 Am7:4 Dm7:4 G7:4', pick: 'T - 1+2+3 1+2+3 B 1+2+3 - 1+2+3', bpm: 66, wait: true, title: 'Bossa, slowly' }),
+        play({ chords: 'Cmaj7:4 Am7:4 Dm7:4 G7:4', pick: 'T - 1+2+3 1+2+3 B 1+2+3 - 1+2+3', bpm: 78, loops: 2, title: 'In time' }),
+      ]),
+    ]),
+    CH('Classical', 'Pro', 'Alberti bass, flowing arpeggios and a Canon study.', [
+      L('Alberti bass review', [
+        play({ chords: 'C:4 G:4 C:4 F:4 C:4 G:4 C:8', pick: '1 3 2 3 1 3 2 3', pickOct: -12, bpm: 76, title: 'Sonata style' }),
+      ]),
+      L('Arpeggio study', [
+        play({ chords: 'C:4 Am:4 Dm:4 G:4', pick: 'T 1 2 3', pickGrid: 0.25, bpm: 52, wait: true, title: 'Slowly' }),
+        play({ chords: 'C:4 Am:4 Dm:4 G7:4 C:8', pick: 'T 1 2 3', pickGrid: 0.25, bpm: 60, title: 'Flowing' }),
+      ]),
+      L('Song: Canon', [song('canon', { text: 'Play the Canon chords with flowing broken chords.' })]),
+    ]),
+  ]);
+})();
+
+/* ======================================================================
+   SINGING · STYLES
+   ====================================================================== */
+TR('voice', 'vy', 'Styles', 'flame', 'Pop, folk, soul & R&B, jazz, rock and musical theatre singing, step by step.', [
+  CH('Pop', 'Beginner', 'Speech-like tone, soft onsets and a clean pop melody.', [
+    L('Sing like you speak', [
+      info('Pop singing sits close to **speech**. Say the line first, then sing it on the same vowels, in the same relaxed voice. Don’t “put on” a voice.'),
+      howTo('Step by step', ['Speak the words in rhythm.', 'Speak them on the notes, quietly.', 'Sing them, keeping the speaking feel.']),
+      sing({ melody: 'E4:1:I G4:1:feel A4:1:so G4:1:a- E4:2:live r:2 E4:1:in G4:1:the A4:1:mor- C5:1:ning A4:2:light', bpm: 80, title: 'A pop line' }),
+    ]),
+    L('Breathy onsets', [
+      info('Start a note with a tiny “**h**” of air for a soft, intimate sound. Use it on quiet lines, not all the time.'),
+      sing({ melody: 'G4:2:ha E4:2:ha D4:2:ha C4:2:ha', bpm: 66, title: 'Soft starts' }),
+    ]),
+    L('Pop chorus', [
+      sing({ melody: 'C5:1:Oh A4:1:oh G4:2:oh E4:1:we G4:1:are A4:2:here r:1 A4:1:and C5:1:we D5:1:sing C5:3:loud', bpm: 84, title: 'Bigger and brighter' }),
+    ]),
+  ]),
+  CH('Folk', 'Beginner', 'Straight tone, storytelling and singing over a guitar.', [
+    L('Straight tone', [
+      info('Folk singers often use a **straight tone**: no vibrato, clear vowels, the words come first.'),
+      sustain({ seconds: 5, title: 'Hold a straight note' }),
+    ]),
+    L('Tell the story', [
+      info('Every line is part of a story. Lean on the important word in each line.'),
+      song('rowboat', { text: 'A simple folk round. Make every word clear and lean on the important ones.' }),
+    ]),
+  ]),
+  CH('Soul & R&B', 'Intermediate', 'Slides, riffs and melisma, built up note by note.', [
+    L('Slides', [
+      info('Soul singers **slide into notes** from just below. Start slow so the slide stays smooth.'),
+      sing({ melody: 'C4>E4:2:oh E4:2:oh D4>G4:2:yeah G4:2:yeah', bpm: 60, title: 'Slide up' }),
+    ]),
+    L('Your first riff, step by step', [
+      info('A **riff** is a quick run of notes on one vowel. Learn it in small pieces.'),
+      sing({ melody: 'A4:1:oh G4:1:_ E4:2:_', bpm: 60, title: 'Step 1: three notes' }),
+      sing({ melody: 'A4:0.5:oh G4:0.5:_ E4:0.5:_ D4:0.5:_ C4:2:_', bpm: 60, title: 'Step 2: five notes' }),
+      sing({ melody: 'A4:0.5:oh G4:0.5:_ E4:0.5:_ D4:0.5:_ C4:2:_', bpm: 80, title: 'Step 3: faster' }),
+    ]),
+    L('Melisma', [
+      info('**Melisma** means many notes on one syllable. Keep the vowel the same and let the notes flow.'),
+      sing({ melody: 'C5:0.5:yeah A4:0.5:_ G4:0.5:_ A4:0.5:_ G4:0.5:_ E4:0.5:_ D4:0.5:_ C4:0.5:_ D4:2:_', bpm: 66, title: 'A long run' }),
+    ]),
+  ]),
+  CH('Jazz', 'Intermediate', 'Swing phrasing and scat syllables.', [
+    L('Swing phrasing', [
+      info('In jazz, pairs of eighth notes are **swung**: long–short. Sing a little behind the beat, relaxed.'),
+      sing({ melody: 'C4:0.67:doo E4:0.33:ba G4:0.67:doo A4:0.33:ba G4:0.67:doo E4:0.33:ba C4:2:doo', bpm: 96, title: 'Swung line' }),
+    ]),
+    L('Scat', [
+      info('**Scat** means singing like an instrument with made-up syllables: “doo”, “ba”, “dat”. Use soft consonants on the short notes.'),
+      sing({ melody: 'G4:0.67:doo A4:0.33:ba C5:0.67:doo A4:0.33:dat G4:1:doo E4:1:ba C4:2:dat', bpm: 96, title: 'Scat phrase' }),
+      sing({ melody: 'C4:0.67:doo Eb4:0.33:ba F4:0.67:doo F#4:0.33:ba G4:1:dat r:1 Bb4:0.67:doo G4:0.33:ba F4:0.67:doo Eb4:0.33:ba C4:2:dat', bpm: 92, title: 'Blues scat, then make up your own' }),
+    ]),
+  ]),
+  CH('Rock', 'Pro', 'Strong mid voice, safe power and energy.', [
+    L('Power without strain', [
+      info('Rock singing is **energy, not shouting**. The power comes from breath support and a bright, forward vowel like “**ay**” or “**eh**”. Never push the throat. If it hurts or tickles, stop.'),
+      sing({ melody: 'E4:1:hey G4:1:hey A4:2:hey G4:1:hey E4:1:hey D4:2:hey', bpm: 84, title: 'Bright and strong' }),
+    ]),
+    L('Rock chorus', [
+      sing({ melody: 'A4:1:we B4:1:are C5:2:on D5:1:the C5:1:run A4:2:now r:1 G4:1:we A4:1:can C5:1:not A4:3:stop', bpm: 92, title: 'With energy' }),
+    ]),
+  ]),
+  CH('Musical theatre', 'Pro', 'Clear diction, acting the song and a held final note.', [
+    L('Clear diction', [
+      info('In theatre the audience must understand **every word**. Make consonants crisp and quick, and keep the vowels long.'),
+      sing({ melody: 'C4:1:Ta D4:1:ke E4:1:me F4:1:to G4:2:the A4:1:sta- G4:3:ge', bpm: 76, title: 'Crisp words' }),
+    ]),
+    L('The big ending', [
+      info('A theatre song often ends on a **long high note**. Breathe low, open the vowel and let it grow.'),
+      sustain({ seconds: 8, mode: 'crescendo', title: 'Grow the final note' }),
+    ]),
+  ]),
+]);
+
 /* ---- tracks_ids.js ---- */
 /* ---------------- ids, lookup tables ----------------
    Lesson ids are saved with your progress, so they must never change.
@@ -6128,7 +6670,7 @@ function pathScreen(view, id) {
         h('span', { class: 'ch-prog' }, progressRing(doneN / ch.lessons.length), h('small', null, `${doneN}/${ch.lessons.length}`))),
       h('div', { class: 'lessons' }, ch.lessons.map(l => {
         const p = Progress.get(l.id), un = Progress.unlocked(l);
-        return h(un ? 'a' : 'div', { class: 'lesson-row' + (un ? '' : ' locked') + (next && next.id === l.id ? ' next' : ''), href: un ? '#lesson-' + l.id : null, onclick: un ? null : () => toast('Finish the lesson before this one first, or start from the first lesson of this level.') },
+        return h(un ? 'a' : 'div', { class: 'lesson-row' + (un ? '' : ' locked') + (next && next.id === l.id ? ' next' : ''), href: un ? '#lesson-' + l.id : null, onclick: null },
           h('span', { class: 'lr-num' }, p && p.done ? icon('check', 16) : un ? String(l.index + 1) : icon('lock', 14)),
           h('span', { class: 'lr-title' }, l.title),
           p ? starsRow(p.stars, 3, 14) : h('span', { class: 'lr-types muted' }, lessonKinds(l)));
@@ -6777,15 +7319,7 @@ const Progress = {
   },
   list(inst) { return COURSES[inst].flatMap(c => c.lessons); },
   group(lesson) { return lesson.group || this.list(lesson.inst); },
-  unlocked(lesson) {
-    if (Settings.get('unlockAll')) return true;
-    const list = this.group(lesson);
-    const i = list.indexOf(lesson);
-    if (i <= 0 || this.get(lesson.id)) return true;
-    if (lesson.track && lesson.index === 0) return true;   // every level of a skill path can be started directly
-    const p = this.get(list[i - 1].id);
-    return !!(p && p.done);
-  },
+  unlocked() { return true; },   // every lesson is open: start anywhere, in any order
   next(inst) { const list = this.list(inst); return list.find(l => !(this.get(l.id) || {}).done) || null; },
   pct(inst) { const list = this.list(inst); return list.filter(l => (this.get(l.id) || {}).done).length / list.length; },
   trackNext(tr) { return tr.lessons.find(l => !(this.get(l.id) || {}).done) || null; },
@@ -6925,7 +7459,7 @@ function learnScreen(view) {
     const open = next ? next.chapter === ci : ci === 0;
     const lessonList = h('div', { class: 'lessons' }, ch.lessons.map(l => {
       const p = Progress.get(l.id), un = Progress.unlocked(l);
-      return h(un ? 'a' : 'div', { class: 'lesson-row' + (un ? '' : ' locked') + (next && next.id === l.id ? ' next' : ''), href: un ? '#lesson-' + l.id : null, onclick: un ? null : () => toast('Finish the previous lesson to unlock this one — or turn on “Unlock all lessons” in Me › Settings.') },
+      return h(un ? 'a' : 'div', { class: 'lesson-row' + (un ? '' : ' locked') + (next && next.id === l.id ? ' next' : ''), href: un ? '#lesson-' + l.id : null, onclick: null },
         h('span', { class: 'lr-num' }, p && p.done ? icon('check', 16) : un ? String(l.index + 1) : icon('lock', 14)),
         h('span', { class: 'lr-title' }, l.title),
         p ? starsRow(p.stars, 3, 14) : h('span', { class: 'lr-types muted' }, lessonKinds(l)));
@@ -6988,7 +7522,11 @@ function lessonScreen(view, id, reg) {
   const body = h('div', { class: 'lesson-body' });
   const nextBtn = h('button', { class: 'btn primary wide', disabled: true, onclick: () => go(idx + 1) }, 'Continue');
   const skip = h('button', { class: 'btn ghost sm', onclick: () => { if (scores[idx] === undefined) scores[idx] = scoreable(lesson.steps[idx]) ? 0 : null; go(idx + 1); } }, 'Skip');
-  view.append(h('div', { class: 'lesson' }, h('div', { class: 'lesson-head' }, h('small', { class: 'muted' }, ch.title), h('h1', null, lesson.title)), prog, body, h('div', { class: 'lesson-foot' }, skip, nextBtn)));
+  const restartL = h('button', { class: 'btn ghost sm restart-btn', title: 'Restart this lesson from step 1', onclick: async () => {
+    if (idx > 0 && idx < lesson.steps.length && !(await dialog({ title: 'Restart this lesson?', body: 'You go back to step 1.', actions: [{ label: 'Cancel', value: false }, { label: 'Restart', primary: true, value: true }] }))) return;
+    scores.length = 0; nextBtn.style.display = ''; skip.style.display = ''; go(0);
+  } }, icon('retry', 16), 'Restart lesson');
+  view.append(h('div', { class: 'lesson' }, h('div', { class: 'lesson-head' }, h('div', { class: 'row between' }, h('small', { class: 'muted' }, ch.title), restartL), h('h1', null, lesson.title)), prog, body, h('div', { class: 'lesson-foot' }, skip, nextBtn)));
   function scoreable(s) { return !['info', 'studio'].includes(s.t); }
   function go(i) {
     if (cur) { cur.destroy(); cur = null; }
@@ -7027,10 +7565,10 @@ function lessonScreen(view, id, reg) {
     body.append(h('div', { class: 'lesson-done' },
       h('div', { class: 'confetti', 'aria-hidden': 'true' }, Array.from({ length: 18 }, (_, k) => h('i', { style: { left: (k * 5.5 + 2) + '%', animationDelay: (k % 6) * 0.08 + 's' } }))),
       starsRow(stars, 3, 40), h('h2', null, stars >= 1 ? 'Lesson complete!' : 'Almost there'),
-      h('p', null, stars >= 1 ? `Score ${Math.round(score * 100)}%` + (xp ? ` · +${xp} XP` : '') : `Score ${Math.round(score * 100)}%. Get 50% or more to unlock the next lesson.`),
+      h('p', null, stars >= 1 ? `Score ${Math.round(score * 100)}%` + (xp ? ` · +${xp} XP` : '') : `Score ${Math.round(score * 100)}%. Get 50% or more to earn a star. Try it again, or slow it down with the − button.`),
       h('div', { class: 'row gap center wrap' },
-        h('button', { class: 'btn ghost', onclick: () => App.route() }, icon('retry', 18), 'Practise again'),
-        nxt && Progress.unlocked(nxt) ? h('a', { class: 'btn primary', href: '#lesson-' + nxt.id }, 'Next: ' + nxt.title) : h('a', { class: 'btn primary', href: home }, 'Back to path'))));
+        h('button', { class: 'btn ghost', onclick: () => App.route() }, icon('retry', 18), 'Restart lesson'),
+        nxt ? h('a', { class: 'btn primary', href: '#lesson-' + nxt.id }, 'Next: ' + nxt.title) : h('a', { class: 'btn primary', href: home }, 'Back to path'))));
     const fresh = Practice.newBadges();
     if (fresh.length) body.querySelector('.lesson-done').append(h('div', { class: 'badge-pop' }, fresh.map(b => h('span', { class: 'chip now' }, icon(b.icon, 14), ' ' + b.name))), h('p', { class: 'muted small' }, 'New badge' + (fresh.length > 1 ? 's' : '') + ' earned!'));
   }
@@ -7364,7 +7902,6 @@ function meScreen(view) {
     toggleRow('Solfège note names', 'solfege', 'Show Do Re Mi instead of C D E.'),
     toggleRow('Prefer flats', 'flats', 'Show B♭ instead of A♯.'),
     h('div', { class: 'toggle-row' }, h('span', null, h('b', null, 'Daily goal'), h('small', { class: 'muted' }, 'Minutes of practice per day')), goalSeg()),
-    toggleRow('Unlock all lessons', 'unlockAll', 'For experienced players who want to skip ahead.'),
     h('label', { class: 'slider' }, h('small', null, 'Metronome volume'), h('input', { type: 'range', min: 0.1, max: 1, step: 0.05, value: Settings.get('tickVolume'), onchange: e => Settings.set('tickVolume', +e.target.value) }))));
   view.append(h('h3', { class: 'section-title' }, 'Help & data'), h('div', { class: 'card' },
     h('a', { class: 'list-item', href: '#setup' }, icon('mic', 20), h('span', { class: 'li-main' }, h('b', null, 'Microphone setup'), h('small', { class: 'muted' }, 'Fix permissions, install on your phone')), icon('chevron', 18)),
